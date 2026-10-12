@@ -174,7 +174,8 @@
 
   // ---------------------------------------------------------------- data ophalen
   /** @typedef {{ id: string, raw: string, name: string, code: string, hasPlans: boolean }} Course */
-  /** @typedef {{ id: string|null, name: string, courses: Course[] }} Learner */
+  /** reportId: wiens voortgangsrapport we lezen (ChildId bij ouders, eigen personId bij leerlingen).
+   * @typedef {{ id: string|null, reportId: string|null, name: string, courses: Course[] }} Learner */
 
   /** Zoek kinderen (ouderaccount) in de huidige pagina, met een fallback op een tweede pagina. */
   async function findChildIds() {
@@ -204,10 +205,18 @@
       if (/\/plans\/courses\//.test(href)) c.hasPlans = true;
       courses.set(id, c);
     });
-    return { id: childId, name, courses: [...courses.values()] };
+    return { id: childId, reportId: childId, name, courses: [...courses.values()] };
   }
 
-  /** Leerling-account (geen ChildId): vakken via de REST API. Nog niet getest met een echt leerlingaccount. */
+  /** personId van de ingelogde gebruiker; itslearning zet die in de paginaconfiguratie ("personId":123). */
+  const grabPersonId = (/** @type {string} */ s) => (s.match(/"personId"\s*:\s*(\d+)/) || [])[1] || null;
+  async function findSelfPersonId() {
+    const id = grabPersonId(document.documentElement.innerHTML);
+    if (id) return id;
+    try { return grabPersonId(await getText("/DashboardMenu.aspx")); } catch { return null; }
+  }
+
+  /** Leerling-account (geen ChildId): vakken via de REST API. */
   async function loadSelf() {
     const res = await getJson("/restapi/personal/courses/v2?PageIndex=0&PageSize=100");
     const arr = res.EntityArray || res.entityArray || [];
@@ -215,7 +224,7 @@
       const raw = c.Title || c.title || c.CourseCode || `Vak ${c.CourseId}`;
       return { id: String(c.CourseId ?? c.courseId ?? c.Id), raw, ...prettyCourse(raw), hasPlans: true };
     });
-    return { id: null, name: "Mijn vakken", courses };
+    return { id: null, reportId: await findSelfPersonId(), name: "Mijn vakken", courses };
   }
 
   /** Alle planner-plannen van een vak (huidig/toekomst + verleden + zonder datum). */
@@ -265,9 +274,9 @@
     return JSON.parse(html.slice(i, j + 1));
   }
 
-  /** Opdrachten + status uit het 360°-voortgangsrapport (alleen ouderaccount). */
-  async function loadReport(courseId, childId) {
-    const html = await getText(`/Reports360/CourseReports/${courseId}/IndividualProgressReport/${childId}`);
+  /** Opdrachten + status uit het 360°-voortgangsrapport. Ouders lezen dat van hun kind, leerlingen van zichzelf. */
+  async function loadReport(courseId, personId) {
+    const html = await getText(`/Reports360/CourseReports/${courseId}/IndividualProgressReport/${personId}`);
     const model = extractModel(html);
     if (!model) return [];
     const decode = (/** @type {string} */ s) => new DOMParser().parseFromString(s || "", "text/html").body.textContent || "";
@@ -348,15 +357,16 @@
     return { key, plans, warnings };
   }
 
-  /** Stap 2: opdrachtstatus uit de voortgangsrapporten (alleen ouders). itslearning verwerkt deze
+  /** Stap 2: opdrachtstatus uit de voortgangsrapporten. itslearning verwerkt deze
    * pagina's per sessie één voor één, dus meer tegelijk opvragen helpt niet en vertraagt de rest.
    * @param {Learner} L */
   async function fetchReports(L) {
     const key = L.id || "self";
     /** @type {Record<string, any[]>} */ const reports = {};
     /** @type {string[]} */ const warnings = [];
-    if (!L.id) return { key, reports, warnings };
-    const res = await pool(L.courses.map((c) => () => loadReport(c.id, /** @type {string} */ (L.id))), 2);
+    const rid = L.reportId;
+    if (!rid) { warnings.push("Opdrachten niet geladen: leerling-ID niet gevonden"); return { key, reports, warnings }; }
+    const res = await pool(L.courses.map((c) => () => loadReport(c.id, rid)), 2);
     L.courses.forEach((c, i) => {
       const r = res[i];
       if (r instanceof Error) { warnings.push(`${c.name}: opdrachten niet geladen (${r.message})`); reports[`${key}:${c.id}`] = []; }
@@ -438,6 +448,9 @@
     const ids = [...new Set([...document.documentElement.innerHTML.matchAll(/ChildId(?:=|\\u003d|%3d)(\d+)/gi)].map((m) => m[1]))];
     const cachedIds = c.learners.map((/** @type {Learner} */ l) => l.id).filter(Boolean);
     if (ids.length ? !cachedIds.every((/** @type {string} */ id) => ids.includes(id)) : cachedIds.length) return false;
+    // Leerling: alleen de cache tonen als die van dezelfde persoon is (bijv. broers/zussen op één computer).
+    const me = ids.length ? null : grabPersonId(document.documentElement.innerHTML);
+    if (me && c.learners[0]?.reportId !== me) return false;
     state.learners = c.learners; state.learnerIdx = c.learnerIdx || 0; state.plans = c.plans || {};
     state.reports = Object.fromEntries(Object.entries(c.reports || {}).map(([k, v]) =>
       [k, /** @type {any[]} */ (v).map((t) => ({ ...t, deadline: t.deadline ? new Date(t.deadline) : null }))]));
@@ -720,7 +733,7 @@
 
   function tasksView() {
     const L = learner();
-    if (!L.id) return h("div", { class: "msg" }, "Het opdrachtenoverzicht werkt nu alleen met een ouderaccount.");
+    if (!L.reportId) return h("div", { class: "msg" }, "Opdrachten konden niet worden geladen: je leerling-ID is niet gevonden op deze pagina.");
     if (state.reportsPending) return h("div", { class: "msg" }, h("div", { class: "spin" }), "Opdrachten worden opgehaald… De planning is al te zien in de andere tabbladen.");
     const now = new Date();
     const all = [];

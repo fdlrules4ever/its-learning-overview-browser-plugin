@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "itslearning Overzicht",
   "short_name": "Overzicht",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Eén overzicht van huiswerk, toetsen en openstaande opdrachten over alle vakken in itslearning.",
   "permissions": ["storage"],
   "background": { "service_worker": "background.js" },

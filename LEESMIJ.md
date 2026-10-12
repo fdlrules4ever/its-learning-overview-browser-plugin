@@ -7,7 +7,7 @@ Chrome-extensie die het huiswerk van alle vakken in itslearning op één scherm 
 - **Toetsen**: alle toetsen, PTD's, PO's en dictees die vanaf deze week gepland staan, per week.
 - **Opdrachten**: wat itslearning als te laat, open of voltooid registreert (voltooide opdrachten staan ingeklapt onderaan).
 
-Getest met een **ouderaccount** (Dalí College). Met een leerlingaccount zou het moeten werken, maar dat is nog niet getest. Het tabblad Opdrachten werkt alleen voor ouders.
+Getest met een **ouderaccount** en een **leerlingaccount** (Dalí College). Alle tabbladen werken voor beide.
 
 ## Installeren (Chrome of Edge)
 
