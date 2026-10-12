@@ -1,5 +1,5 @@
 // @ts-check
-/* itslearning Overzicht — content script.
+/* Overzicht voor itslearning — content script.
  * Draait op *.itslearning.com en gebruikt de bestaande inlogsessie (cookies) van de gebruiker.
  * Er gaat geen data naar een andere server: alles wordt in de browser opgehaald en getoond.
  */
