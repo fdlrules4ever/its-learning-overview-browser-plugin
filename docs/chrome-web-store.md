@@ -12,6 +12,12 @@ git archive --format=zip -o dist/overzicht-voor-itslearning.zip HEAD manifest.js
 
 Maak `dist/` eerst aan als die nog niet bestaat. Verhoog bij elke nieuwe upload `version` in `manifest.json`.
 
+Uitgepakte map voor "Uitgepakte extensie laden" in ontwikkelaarsmodus (zelfde inhoud als de zip):
+
+```bash
+rm -rf dist/overzicht-voor-itslearning && mkdir -p dist/overzicht-voor-itslearning && git archive HEAD manifest.json background.js content.js icons | tar -x -C dist/overzicht-voor-itslearning
+```
+
 ## Tabblad "Store listing"
 
 **Taal:** Nederlands
