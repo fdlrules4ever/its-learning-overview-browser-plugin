@@ -37,6 +37,8 @@
       this.status = status;
     }
   }
+  /** @param {unknown} e */
+  const isLoginError = (e) => e instanceof HttpError && e.status === 401;
   /** @param {string} url */
   async function getJson(url) {
     const r = await fetch(url, { credentials: "include", headers: { Accept: "application/json" } });
@@ -47,7 +49,8 @@
   async function getText(url) {
     const r = await fetch(url, { credentials: "include" });
     if (!r.ok) throw new HttpError(r.status, url);
-    if (/\/(index|login)\.aspx/i.test(r.url)) throw new Error("Niet (meer) ingelogd");
+    // Verlopen sessie: itslearning stuurt door naar een in- of uitlogpagina (bijv. /log_out.aspx?SessionExpired=3), met status 200.
+    if (/\/(index|login|log_?out)\.aspx|SessionExpired=/i.test(r.url)) throw new HttpError(401, url);
     return r.text();
   }
   /** Voer taken uit met beperkte parallelliteit, zodat we itslearning niet overspoelen.
@@ -315,6 +318,7 @@
     reportsPending: false,
     autoOpen: false,
     /** @type {string|null} */ refreshError: null,
+    loggedOut: false,
   };
 
   // Versheid: data wordt lokaal gecached en op de achtergrond ververst.
@@ -349,7 +353,7 @@
     courses.forEach((c, i) => {
       const p = res[i];
       if (p instanceof Error) {
-        if (p instanceof HttpError && p.status === 401) throw p;
+        if (isLoginError(p)) throw p;
         if (!(p instanceof HttpError && p.status === 404)) { warnings.push(`${c.name}: planner niet geladen (${p.message})`); failures++; }
       } else plans[`${key}:${c.id}`] = p.map(slimPlan);
     });
@@ -367,6 +371,8 @@
     const rid = L.reportId;
     if (!rid) { warnings.push("Opdrachten niet geladen: leerling-ID niet gevonden"); return { key, reports, warnings }; }
     const res = await pool(L.courses.map((c) => () => loadReport(c.id, rid)), 2);
+    const loginErr = res.find(isLoginError);
+    if (loginErr) throw loginErr;
     L.courses.forEach((c, i) => {
       const r = res[i];
       if (r instanceof Error) { warnings.push(`${c.name}: opdrachten niet geladen (${r.message})`); reports[`${key}:${c.id}`] = []; }
@@ -390,6 +396,8 @@
       const learners = childIds.length ? await Promise.all(childIds.map(loadChild)) : [await loadSelf()];
       const idx = Math.max(0, learners.findIndex((x) => x.id === currentId));
       const L = learners[idx];
+      // Nul vakken is vrijwel altijd een verlopen sessie of een gewijzigde pagina, geen echte lege lijst.
+      if (!L.courses.length) throw new Error("Geen vakken gevonden. Mogelijk ben je uitgelogd: herlaad itslearning en log opnieuw in.");
 
       // Stap 1: planning
       const p = await fetchPlans(L, (msg) => { if (!silent) { state.progress = msg; render(); } });
@@ -410,20 +418,21 @@
       Object.assign(state.reports, r.reports);
       state.warnings = [...p.warnings, ...r.warnings];
       state.reportsPending = false;
-      state.loadedAt = new Date(); state.refreshError = null;
+      state.loadedAt = new Date(); state.refreshError = null; state.loggedOut = false;
       await saveCache();
       if (!silent || fingerprint(p.key) !== before) render(); else updateStatus();
     } catch (e) {
-      const msg = e instanceof HttpError && e.status === 401
-        ? "Je bent niet (meer) ingelogd op itslearning. Log opnieuw in."
+      state.loggedOut = isLoginError(e);
+      const msg = state.loggedOut
+        ? "Je sessie in itslearning is verlopen. Log opnieuw in."
         : `${e instanceof Error ? e.message : e}`;
       if (hasData() && !state.loading) { state.refreshError = msg; }
-      else { state.error = `Laden mislukt: ${msg}`; }
+      else { state.error = state.loggedOut ? msg : `Laden mislukt: ${msg}`; }
       state.reportsPending = false;
     } finally {
       const wasLoading = state.loading;
       state.loading = false; state.refreshing = false; state.progress = "";
-      if (wasLoading || state.error) render(); else updateStatus();
+      if (wasLoading || state.error || state.loggedOut) render(); else updateStatus();
     }
   }
   /** Vingerafdruk om te zien of er echt iets veranderd is. Querystrings worden genegeerd, want
@@ -573,11 +582,15 @@
   }
 
   function body() {
-    if (state.error) return h("div", { class: "msg err" }, state.error);
+    const relogin = h("button", { class: "relogin", onclick: () => location.reload() }, "Pagina herladen en inloggen");
+    if (state.error) return h("div", { class: "msg err" }, h("div", null, state.error), state.loggedOut ? relogin : null);
     if (state.loading || !learner()) return h("div", { class: "msg" }, h("div", { class: "spin" }), state.progress || "Laden…");
     const warn = state.warnings.length ? h("details", { class: "warn" }, h("summary", null, `${state.warnings.length} melding(en) bij het laden`), h("ul", null, state.warnings.map((w) => h("li", null, w)))) : null;
     const view = state.view === "tests" ? testsView() : state.view === "tasks" ? tasksView() : state.view === "all" ? allView() : weekView();
-    return [warn, view];
+    // Verlopen sessie met oude gegevens in beeld: duidelijk melden, niet alleen in de statusregel.
+    const expired = state.loggedOut ? h("div", { class: "expired" },
+      h("span", null, `Je sessie in itslearning is verlopen. Je ziet de gegevens van ${statusInfo().text.replace(/^Bijwerken mislukt · gegevens van /, "")}.`), relogin) : null;
+    return [expired, warn, view];
   }
 
   /** Plannen per vak met hun vakinfo. */
@@ -816,6 +829,9 @@
   .status{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
   .status::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--line)}
   .status.ok::before{background:var(--green)}.status.warn{color:#b35c00}.status.warn::before{background:#f08c00}
+  .expired{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--redbg);color:var(--red);border:1px solid currentColor;border-radius:10px;padding:10px 14px;margin:0 0 14px;font-weight:600}
+  button.relogin{font:inherit;font-weight:600;border:0;border-radius:8px;padding:6px 12px;background:var(--accent);color:#fff;cursor:pointer;margin-top:8px}
+  .expired button.relogin{margin-top:0}
   .status.busy::before{background:var(--accent);animation:pulse 1s ease-in-out infinite}@keyframes pulse{50%{opacity:.25}}
   @media (max-width:600px){.arow{grid-template-columns:1fr;gap:4px}.grid{grid-template-columns:1fr}.body{padding:12px}}
   `;
